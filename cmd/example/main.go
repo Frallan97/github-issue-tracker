@@ -3,69 +3,62 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 
-	"github.com/frans-sjostrom/github-issue-tracker/pkg/issue"
+	"github.com/Frallan97/github-issue-tracker/pkg/issue"
 )
 
 func main() {
-	// Get GitHub configuration from environment
+	// Get GitHub PAT from environment
 	pat := os.Getenv("GITHUB_PAT")
-	owner := os.Getenv("GITHUB_OWNER")
-	repo := os.Getenv("GITHUB_REPO")
-
-	if pat == "" || owner == "" || repo == "" {
-		log.Fatal("Please set GITHUB_PAT, GITHUB_OWNER, and GITHUB_REPO environment variables")
+	if pat == "" {
+		log.Fatal("GITHUB_PAT environment variable is required")
 	}
 
-	// Initialize the issue service
+	// Create new issue service
 	service := issue.New(issue.Config{
-		PATToken: pat,
-		Owner:    owner,
-		Repo:     repo,
+		PATToken:   pat,
+		Owner:      "your-username",
+		Repo:       "your-repo",
+		HTTPClient: http.DefaultClient,
 	})
 
 	// Create a new issue
 	newIssue := &issue.Issue{
-		Title:     "Test Issue from GitHub Issue Tracker",
-		Body:      "This is a test issue created using the GitHub Issue Tracker package.",
-		Labels:    []string{"test", "documentation"},
-		Assignees: []string{owner},
+		Title: "Test Issue",
+		Body:  "This is a test issue created via the API",
+		Labels: []string{
+			"test",
+			"api",
+		},
 	}
 
-	response, err := service.Create(newIssue)
+	response, err := service.Create(&issue.IssueRequest{Issue: newIssue})
 	if err != nil {
-		log.Fatalf("Failed to create issue: %v", err)
+		log.Fatal(err)
 	}
 
-	fmt.Printf("Issue created successfully!\n")
-	fmt.Printf("Title: %s\n", response.Title)
-	fmt.Printf("URL: %s\n", response.HTMLURL)
-	fmt.Printf("Number: %d\n", response.Number)
+	fmt.Printf("Created issue #%d: %s\n", response.Number, response.HTMLURL)
 
-	// Get the created issue
-	issue, err := service.Get(response.Number)
+	// Get issue by number
+	fetchedIssue, err := service.Get(response.Number)
 	if err != nil {
-		log.Fatalf("Failed to get issue: %v", err)
+		log.Fatal(err)
 	}
 
-	fmt.Printf("\nRetrieved issue:\n")
-	fmt.Printf("Title: %s\n", issue.Title)
-	fmt.Printf("State: %s\n", issue.State)
+	fmt.Printf("Retrieved issue: %s\n", fetchedIssue.Title)
 
 	// Update the issue
-	update := &issue.Issue{
-		Title: "Updated: Test Issue from GitHub Issue Tracker",
-		Body:  "This issue has been updated using the GitHub Issue Tracker package.",
+	updateIssue := &issue.Issue{
+		Title: "Updated Test Issue",
 		State: "closed",
 	}
 
-	updated, err := service.Update(response.Number, update)
+	updated, err := service.Update(response.Number, &issue.IssueRequest{Issue: updateIssue})
 	if err != nil {
-		log.Fatalf("Failed to update issue: %v", err)
+		log.Fatal(err)
 	}
 
-	fmt.Printf("\nIssue updated successfully!\n")
-	fmt.Printf("New title: %s\n", updated.Title)
-	fmt.Printf("New state: %s\n", updated.State)
+	fmt.Printf("Updated issue: %s (Status: %s)\n", updated.Title, updated.State)
 }

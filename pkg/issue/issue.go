@@ -7,6 +7,29 @@ import (
 	"net/http"
 )
 
+// Collaborator represents a GitHub repository collaborator
+type Collaborator struct {
+	Login string `json:"login"`
+	ID    int    `json:"id"`
+	Type  string `json:"type"`
+	IsBot bool   `json:"is_bot,omitempty"`
+}
+
+// CollaboratorList represents a list of collaborators with helper methods
+type CollaboratorList struct {
+	Items []*Collaborator
+}
+
+// FindByLogin finds a collaborator by their login name
+func (cl *CollaboratorList) FindByLogin(login string) *Collaborator {
+	for _, c := range cl.Items {
+		if c.Login == login {
+			return c
+		}
+	}
+	return nil
+}
+
 // Service handles GitHub issue operations
 type Service struct {
 	patToken    string
@@ -33,6 +56,12 @@ type Issue struct {
 	Assignees []string `json:"assignees,omitempty"`
 	State     string   `json:"state,omitempty"`
 	Milestone int      `json:"milestone,omitempty"`
+}
+
+// IssueRequest represents the data needed to create or update an issue
+type IssueRequest struct {
+	Issue     *Issue   `json:"issue"`
+	Assignees []string `json:"assignees,omitempty"` // List of usernames to assign (including github-copilot[bot])
 }
 
 // Response represents a GitHub issue response
@@ -68,24 +97,33 @@ func New(config Config) *Service {
 }
 
 // Create creates a new GitHub issue
-func (s *Service) Create(issue *Issue) (*Response, error) {
+func (s *Service) Create(req *IssueRequest) (*Response, error) {
+	if req.Issue == nil {
+		return nil, fmt.Errorf("issue cannot be nil")
+	}
+
+	// Set assignees if provided
+	if len(req.Assignees) > 0 {
+		req.Issue.Assignees = req.Assignees
+	}
+
 	url := fmt.Sprintf("%s/repos/%s/%s/issues", s.apiEndpoint, s.owner, s.repo)
 
-	payload, err := json.Marshal(issue)
+	payload, err := json.Marshal(req.Issue)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal issue: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(payload))
+	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(payload))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.patToken))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.patToken))
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	resp, err := s.httpClient.Do(req)
+	resp, err := s.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
@@ -134,24 +172,33 @@ func (s *Service) Get(issueNumber int) (*Response, error) {
 }
 
 // Update updates an existing GitHub issue
-func (s *Service) Update(issueNumber int, issue *Issue) (*Response, error) {
+func (s *Service) Update(issueNumber int, req *IssueRequest) (*Response, error) {
+	if req.Issue == nil {
+		return nil, fmt.Errorf("issue cannot be nil")
+	}
+
+	// Set assignees if provided
+	if len(req.Assignees) > 0 {
+		req.Issue.Assignees = req.Assignees
+	}
+
 	url := fmt.Sprintf("%s/repos/%s/%s/issues/%d", s.apiEndpoint, s.owner, s.repo, issueNumber)
 
-	payload, err := json.Marshal(issue)
+	payload, err := json.Marshal(req.Issue)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal issue: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPatch, url, bytes.NewBuffer(payload))
+	httpReq, err := http.NewRequest(http.MethodPatch, url, bytes.NewBuffer(payload))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.patToken))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.patToken))
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	resp, err := s.httpClient.Do(req)
+	resp, err := s.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
@@ -167,4 +214,42 @@ func (s *Service) Update(issueNumber int, issue *Issue) (*Response, error) {
 	}
 
 	return &result, nil
+}
+
+// GetCollaborators fetches all collaborators for the repository including GitHub Copilot
+func (s *Service) GetCollaborators() (*CollaboratorList, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/collaborators", s.apiEndpoint, s.owner, s.repo)
+
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.patToken))
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get collaborators, status: %d", resp.StatusCode)
+	}
+
+	var collaborators []*Collaborator
+	if err := json.NewDecoder(resp.Body).Decode(&collaborators); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// Add GitHub Copilot as a special collaborator
+	copilotBot := &Collaborator{
+		Login: "github-copilot[bot]",
+		Type:  "Bot",
+		IsBot: true,
+	}
+	collaborators = append(collaborators, copilotBot)
+
+	return &CollaboratorList{Items: collaborators}, nil
 }
